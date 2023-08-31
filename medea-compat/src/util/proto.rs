@@ -1,30 +1,29 @@
-use std::marker::PhantomData;
-use tokio::sync::{mpsc, oneshot};
-use async_trait::async_trait;
 use std::net::SocketAddr;
-use str0m::Candidate;
-use str0m::change::{SdpAnswer, SdpOffer};
-use str0m::channel::ChannelData;
-use str0m::media::MediaData;
-use str0m::net::{DatagramSend, Transmit};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::{mpsc, oneshot};
 
-#[derive(Debug, Clone, Copy)]
-pub struct PeerId(u32);
+use str0m::change::{SdpAnswer, SdpOffer};
+use str0m::media::MediaData;
+use str0m::net::Transmit;
+use str0m::{Candidate, RtcError};
+
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+pub struct PeerId(pub u32);
 
 pub enum EngineEvent {
     RemoteCandidateAdded(Candidate, oneshot::Sender<()>),
     LocalCandidateAdded(Candidate, oneshot::Sender<()>),
     PacketReceived {
+        at: Instant,
         source: SocketAddr,
         destination: SocketAddr,
-        contents: Vec<u8>,
+        payload: Vec<u8>,
     },
-    OfferReceived(SdpOffer, oneshot::Sender<SdpAnswer>),
+    OfferReceived(SdpOffer, oneshot::Sender<Result<SdpAnswer, RtcError>>),
     AnswerReceived(SdpAnswer, oneshot::Sender<()>),
-    SubscribeToDataChannel(mpsc::UnboundedSender<ChannelData>),
-    SubscrbeToMediaChannel(mpsc::UnboundedSender<MediaData>),
     WriteMediaData(MediaData),
-    WriteData(Vec<u8>),
+    WriteChannelData(Vec<u8>, oneshot::Sender<()>),
 }
 
 pub enum EngineCommand {
@@ -32,9 +31,6 @@ pub enum EngineCommand {
     PeerCreated(PeerId, mpsc::UnboundedSender<EngineEvent>),
     PeerConnected(PeerId, SocketAddr),
 }
-
-
-
 
 // pub struct EngineEventReceiver {
 //     rx: mpsc::UnboundedReceiver<EngineEventMsg>,

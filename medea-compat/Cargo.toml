@@ -9,3 +9,9 @@ edition = "2021"
 str0m = { path = ".." }
 tokio = { version = "1.32", features = ["full"] }
 futures = "0.3"
+log = "0.4"
+rouille = { version = "3.5.0", features = ["ssl"] }
+systemstat = "0.2.2"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std"] }
+serde_json = "1.0"
+simple_logger = "4.2"

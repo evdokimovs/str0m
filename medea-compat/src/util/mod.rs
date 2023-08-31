@@ -1,6 +1,10 @@
 use std::net::IpAddr;
 use systemstat::{Platform, System};
 
+pub mod peer;
+pub mod proto;
+pub mod udp_conn;
+
 pub fn select_host_address() -> IpAddr {
     let system = System::new();
     let networks = system.networks().unwrap();
