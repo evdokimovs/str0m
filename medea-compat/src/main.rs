@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
-use crate::util::peer::PeerHandle;
+// use crate::util::peer::PeerHandle;
 use rouille::{Request, Response};
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::{ChannelData, ChannelId};
@@ -14,9 +14,12 @@ use str0m::media::MediaKind;
 use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
 use str0m::Event;
 use str0m::{net::Receive, Candidate, IceConnectionState, Input, Output, Rtc};
-use util::udp_conn::PeerConnectionEngine;
+// use util::udp_conn::PeerConnectionEngine;
+use crate::peer::PeerConnectionHandle;
+use crate::peer::PeerConnectionFactory;
 
 mod util;
+mod peer;
 
 #[tokio::main]
 pub async fn main() {
@@ -28,7 +31,7 @@ pub async fn main() {
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = util::select_host_address();
 
-    let engine = Arc::new(PeerConnectionEngine::new(host_addr));
+    let engine = Arc::new(PeerConnectionFactory::new(host_addr));
 
     let mut connections = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let addr = engine.local_addr;
@@ -52,9 +55,9 @@ pub async fn main() {
 // Handle a web request.
 fn web_request(
     request: &Request,
-    engine: Arc<PeerConnectionEngine>,
+    engine: Arc<PeerConnectionFactory>,
     handle: &tokio::runtime::Handle,
-    connections: Arc<tokio::sync::Mutex<Vec<PeerHandle>>>,
+    connections: Arc<tokio::sync::Mutex<Vec<PeerConnectionHandle>>>,
 ) -> Response {
     if request.method() == "GET" {
         return Response::html(include_str!("chat.html"));

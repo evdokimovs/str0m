@@ -166,6 +166,7 @@ impl PeerConnection {
 
     fn handle_event(&mut self, event: EngineEvent) {
         match event {
+            _ => todo!(),
             EngineEvent::RemoteCandidateAdded(candidate, resolver) => {
                 self.rtc.add_remote_candidate(candidate);
                 resolver.send(()).unwrap();

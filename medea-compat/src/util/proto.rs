@@ -3,10 +3,13 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 
+use str0m::media::Mid;
 use str0m::change::{SdpAnswer, SdpOffer};
-use str0m::media::MediaData;
+use str0m::media::{Direction, MediaData, MediaKind};
 use str0m::net::Transmit;
 use str0m::{Candidate, RtcError};
+use str0m::channel::ChannelData;
+use crate::peer::{LocalTrack, RemoteTrack, Transceiver};
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct PeerId(pub u32);
@@ -22,8 +25,13 @@ pub enum EngineEvent {
     },
     OfferReceived(SdpOffer, oneshot::Sender<Result<SdpAnswer, RtcError>>),
     AnswerReceived(SdpAnswer, oneshot::Sender<()>),
+    SubscribeToDataChannel(mpsc::UnboundedSender<ChannelData>),
+    SubscriberToOnRemoteTrack(mpsc::UnboundedSender<(RemoteTrack, Transceiver)>),
+    SubscriberToOnLocalTrack(mpsc::UnboundedSender<(LocalTrack, Transceiver)>),
+    SubsriberRemoteTrack(Mid, mpsc::UnboundedSender<MediaData>),
     WriteMediaData(MediaData),
     WriteChannelData(Vec<u8>, oneshot::Sender<()>),
+    AddTransceiver(MediaKind, Direction, oneshot::Sender<SdpOffer>),
 }
 
 pub enum EngineCommand {
