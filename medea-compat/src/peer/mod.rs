@@ -3,7 +3,9 @@ mod remote_track;
 mod transceiver;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::time::Duration;
 use std::time::Instant;
 use str0m::net::Receive;
@@ -16,6 +18,7 @@ use str0m::channel::{ChannelData, ChannelId};
 use str0m::media::{Direction, MediaData, Mid};
 use str0m::Input;
 use str0m::{Candidate, Rtc};
+use str0m::media::MediaKind;
 use tokio::sync::oneshot;
 
 use crate::util::proto::{EngineCommand, EngineEvent, PeerId};
@@ -23,6 +26,10 @@ use crate::util::proto::{EngineCommand, EngineEvent, PeerId};
 pub use self::local_track::LocalTrack;
 pub use self::remote_track::RemoteTrack;
 pub use self::transceiver::Transceiver;
+
+pub type OnChannelDataHdlrFn = Box<
+    dyn (FnMut(ChannelData) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync,
+>;
 
 pub struct PeerConnectionFactory {
     tx: mpsc::UnboundedSender<EngineCommand>,
@@ -43,16 +50,20 @@ impl PeerConnectionFactory {
     }
 }
 
-#[derive(Debug)]
-pub struct PeerConnectionHandle(mpsc::UnboundedSender<EngineEvent>);
+#[derive(Debug, Clone)]
+pub struct PeerConnectionHandle(mpsc::UnboundedSender<EngineEvent>, PeerId);
 
 impl PeerConnectionHandle {
-    pub async fn set_local_candidate(&self, candidate: Candidate) {
+    pub fn peer_id(&self) -> PeerId {
+        self.1
+    }
+
+    pub async fn add_local_candidate(&self, candidate: Candidate) {
         let (tx, rx) = oneshot::channel();
         self.0.send(EngineEvent::LocalCandidateAdded(candidate, tx));
     }
 
-    pub async fn set_remote_candidate(&self, candidate: Candidate) {
+    pub async fn add_remote_candidate(&self, candidate: Candidate) {
         let (tx, rx) = oneshot::channel();
         self.0
             .send(EngineEvent::RemoteCandidateAdded(candidate, tx));
@@ -71,6 +82,22 @@ impl PeerConnectionHandle {
         rx
     }
 
+    pub fn on_channel_data(&self, mut f: OnChannelDataHdlrFn) {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        self.0.send(EngineEvent::SubscribeToDataChannel(tx));
+        tokio::spawn(async move {
+            while let Some(data) = rx.recv().await {
+                f(data);
+            }
+        });
+    }
+
+    pub async fn send_channel_data(&self, data: Vec<u8>) {
+        let (tx, rx) = oneshot::channel();
+        self.0.send(EngineEvent::WriteChannelData(data, tx));
+        rx.await;
+    }
+
     pub async fn accept_offer(&self, offer: SdpOffer) -> Result<SdpAnswer, RtcError> {
         let (tx, rx) = oneshot::channel();
         self.0.send(EngineEvent::OfferReceived(offer, tx));
@@ -82,10 +109,16 @@ impl PeerConnectionHandle {
         self.0.send(EngineEvent::AnswerReceived(answer, tx));
         rx.await.unwrap()
     }
+
+    pub async fn add_transceivers(&self, transceivers: Vec<(MediaKind, Direction, String)>) -> Option<SdpOffer> {
+        let (tx, rx) = oneshot::channel();
+        self.0.send(EngineEvent::AddTransceivers(transceivers, tx));
+        rx.await.unwrap()
+    }
 }
 
 #[derive(Debug)]
-struct PeerConnection {
+pub struct PeerConnection {
     event_receiver: mpsc::UnboundedReceiver<EngineEvent>,
     event_sender: mpsc::UnboundedSender<EngineEvent>,
     command_sender: mpsc::UnboundedSender<EngineCommand>,
@@ -125,7 +158,7 @@ impl PeerConnection {
 
         this.spawn();
 
-        PeerConnectionHandle(event_sender)
+        PeerConnectionHandle(event_sender, peer_id)
     }
 
     fn spawn(mut self) {
@@ -229,12 +262,16 @@ impl PeerConnection {
             EngineEvent::SubsriberRemoteTrack(mid, sub) => {
                 assert!(self.remote_track_sub.insert(mid, sub).is_none());
             }
-            EngineEvent::AddTransceiver(kind, direction, tx) => {
+            EngineEvent::AddTransceivers(transceivers, tx) => {
                 let mut sdp_api = self.rtc.sdp_api();
-                sdp_api.add_media(kind, direction, None, None);
+                for (kind, direction, stream_id) in transceivers {
+                    sdp_api.add_media(kind, direction, Some(stream_id), None);
+                }
                 if let Some((offer, pending)) = sdp_api.apply() {
                     self.pending_offer = Some(pending);
-                    tx.send(offer);
+                    tx.send(Some(offer));
+                } else {
+                    tx.send(None);
                 }
             }
         }
@@ -258,6 +295,7 @@ impl PeerConnection {
         use str0m::Event;
         match rtc_event {
             Event::MediaData(data) => {
+                println!("MediaData received");
                 if let Some(sub) = self.remote_track_sub.get(&data.mid) {
                     sub.send(data);
                 }
@@ -268,6 +306,7 @@ impl PeerConnection {
                 }
             }
             Event::MediaAdded(media) => {
+                println!("MediaAdded event sent");
                 let transceiver =
                     Transceiver::new(media.mid, media.direction, self.event_sender.clone());
                 if media.direction.is_receiving() {
@@ -281,16 +320,18 @@ impl PeerConnection {
                 if media.direction.is_sending() {
                     if let Some(sub) = &self.on_local_track_sub {
                         sub.send((
-                            LocalTrack::new(self.event_sender.clone(), media.mid),
+                            LocalTrack::new(self.event_sender.clone(), media.mid, media.kind, media.direction),
                             transceiver.clone(),
                         ));
                     }
                 }
             }
             Event::ChannelOpen(cid, _) => {
+                println!("ChannelOpen event sent");
                 assert!(self.cid.replace(cid).is_none());
             }
             Event::Connected => {
+                println!("Connected Peer");
                 if let Some(source_addr) = self.source_addr {
                     self.command_sender
                         .send(EngineCommand::PeerConnected(self.peer_id, source_addr));

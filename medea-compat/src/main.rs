@@ -14,8 +14,8 @@ use str0m::media::MediaKind;
 use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
 use str0m::Event;
 use str0m::{net::Receive, Candidate, IceConnectionState, Input, Output, Rtc};
-// use util::udp_conn::PeerConnectionEngine;
-use crate::peer::PeerConnectionHandle;
+use util::udp_conn::PeerConnectionEngine;
+use crate::peer::{LocalTrack, PeerConnectionHandle};
 use crate::peer::PeerConnectionFactory;
 
 mod util;
@@ -31,16 +31,17 @@ pub async fn main() {
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = util::select_host_address();
 
-    let engine = Arc::new(PeerConnectionFactory::new(host_addr));
+    let engine = Arc::new(PeerConnectionEngine::new(host_addr));
 
     let mut connections = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let addr = engine.local_addr;
+    let local_tracks = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
 
     let handle = tokio::runtime::Handle::current();
     let server = rouille::Server::new_ssl(
         "0.0.0.0:3000",
-        move |request| web_request(request, Arc::clone(&engine), &handle, Arc::clone(&connections)),
+        move |request| web_request(request, Arc::clone(&engine), &handle, Arc::clone(&connections), Arc::clone(&local_tracks)),
         certificate,
         private_key,
     )
@@ -52,12 +53,29 @@ pub async fn main() {
     server.run();
 }
 
+fn clone_media_data(data: &MediaData) -> MediaData {
+    MediaData {
+        mid: data.mid,
+        pt: data.pt,
+        rid: data.rid,
+        params: data.params,
+        time: data.time,
+        network_time: data.network_time,
+        seq_range: data.seq_range.clone(),
+        contiguous: data.contiguous,
+        data: data.data.clone(),
+        ext_vals: data.ext_vals,
+        codec_extra: data.codec_extra,
+    }
+}
+
 // Handle a web request.
 fn web_request(
     request: &Request,
-    engine: Arc<PeerConnectionFactory>,
+    engine: Arc<PeerConnectionEngine>,
     handle: &tokio::runtime::Handle,
     connections: Arc<tokio::sync::Mutex<Vec<PeerConnectionHandle>>>,
+    local_tracks: Arc<tokio::sync::Mutex<Vec<LocalTrack>>>,
 ) -> Response {
     if request.method() == "GET" {
         return Response::html(include_str!("chat.html"));
@@ -66,6 +84,7 @@ fn web_request(
     let mut data = request.data().expect("body to be available");
 
     let offer: SdpOffer = serde_json::from_reader(&mut data).expect("serialized offer");
+    println!("Creating Peer");
 
     let (tx, rx) = mpsc::channel();
     handle.spawn(async move {
@@ -76,6 +95,7 @@ fn web_request(
             .on_channel_data({
                 let peer = peer.clone();
                 Box::new(move |d| {
+                    println!("Received ChannelData");
                     let peer = peer.clone();
                     Box::pin(async move {
                         let offer = serde_json::from_slice::<'_, SdpOffer>(&d.data).unwrap();
@@ -94,14 +114,53 @@ fn web_request(
                         log::error!("answer sent");
                     })
                 })
-            })
-            .await;
+            });
 
-        peer.on_media_data(Box::new(move |d| {
-            log::error!("on_media_data");
+        tokio::spawn({
+            let mut rx = peer.on_local_track();
+            let local_tracks = Arc::clone(&local_tracks);
+            async move {
+                while let Some((local_track, transceiver)) = rx.recv().await {
+                    println!("Receiver LocalTrack");
+                    local_tracks.lock().await.push(local_track);
+                }
+            }
+        });
 
-            Box::pin(async move { })
-        })).await;
+        tokio::spawn({
+            let mut rx = peer.on_remote_track();
+            let local_tracks = Arc::clone(&local_tracks);
+            let peer = peer.clone();
+            async move {
+                while let Some((remote_track, _)) = rx.recv().await {
+                    println!("Received RemoteTrack");
+
+                    let trans: Vec<_> = local_tracks.lock().await.iter()
+                        .map(|t| {
+                            (t.kind(), t.direction(), peer.peer_id().0.to_string())
+                        })
+                        .collect();
+                    let sdp_offer = peer.add_transceivers(trans).await;
+                    if sdp_offer.is_some() {
+                        println!("{:?}", sdp_offer);
+                    }
+
+                    tokio::spawn({
+                        let local_tracks = Arc::clone(&local_tracks);
+                        async move {
+                            let mut reader = remote_track.rtp_reader();
+                            while let Some(data) = reader.recv().await {
+                                println!("Received packet from RemoteTrack");
+                                for t in local_tracks.lock().await.iter() {
+                                    println!("Sending packet to LocalTrack");
+                                    t.write_rtp(clone_media_data(&data));
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        });
 
         let answer = peer
             .accept_offer(offer)

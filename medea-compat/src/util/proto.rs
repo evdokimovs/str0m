@@ -31,7 +31,7 @@ pub enum EngineEvent {
     SubsriberRemoteTrack(Mid, mpsc::UnboundedSender<MediaData>),
     WriteMediaData(MediaData),
     WriteChannelData(Vec<u8>, oneshot::Sender<()>),
-    AddTransceiver(MediaKind, Direction, oneshot::Sender<SdpOffer>),
+    AddTransceivers(Vec<(MediaKind, Direction, String)>, oneshot::Sender<Option<SdpOffer>>),
 }
 
 pub enum EngineCommand {
