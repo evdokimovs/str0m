@@ -98,20 +98,25 @@ fn web_request(
                     println!("Received ChannelData");
                     let peer = peer.clone();
                     Box::pin(async move {
-                        let offer = serde_json::from_slice::<'_, SdpOffer>(&d.data).unwrap();
+                        log::error!("receiving offer");
+                        if let Ok(offer) = serde_json::from_slice::<'_, SdpOffer>(&d.data) {
+                            log::error!("offer received");
+                            let answer = peer.accept_offer(offer).await.unwrap();
+                            let json = serde_json::to_string(&answer).unwrap();
+                            // // Keep local track state in sync, cancelling any pending negotiation
+                            // // so we can redo it after this offer is handled.
+                            // for track in &mut self.tracks_out {
+                            //     if let TrackOutState::Negotiating(_) = track.state {
+                            //         track.state = TrackOutState::ToOpen;
+                            //     }
+                            // }
+                            peer.send_channel_data(json.as_bytes().to_vec()).await;
+                            log::error!("answer sent");
+                        } else if let Ok(answer) = serde_json::from_slice::<'_, SdpAnswer>(&d.data) {
+                            peer.accept_answer(answer).await;
+                        }
+                        // let offer = .unwrap();
 
-                        log::error!("offer received");
-                        let answer = peer.accept_offer(offer).await.unwrap();
-                        let json = serde_json::to_string(&answer).unwrap();
-                        // // Keep local track state in sync, cancelling any pending negotiation
-                        // // so we can redo it after this offer is handled.
-                        // for track in &mut self.tracks_out {
-                        //     if let TrackOutState::Negotiating(_) = track.state {
-                        //         track.state = TrackOutState::ToOpen;
-                        //     }
-                        // }
-                        peer.send_channel_data(json.as_bytes().to_vec()).await;
-                        log::error!("answer sent");
                     })
                 })
             });
@@ -131,6 +136,7 @@ fn web_request(
             let mut rx = peer.on_remote_track();
             let local_tracks = Arc::clone(&local_tracks);
             let peer = peer.clone();
+            let connections = Arc::clone(&connections);
             async move {
                 while let Some((remote_track, _)) = rx.recv().await {
                     println!("Received RemoteTrack");
@@ -140,20 +146,32 @@ fn web_request(
                             (t.kind(), t.direction(), peer.peer_id().0.to_string())
                         })
                         .collect();
-                    let sdp_offer = peer.add_transceivers(trans).await;
-                    if sdp_offer.is_some() {
-                        println!("{:?}", sdp_offer);
+                    // println!("Remote track transceivers: {:?}", trans);
+                    for conn in connections.lock().await.iter() {
+                        // let sdp_offer = peer.add_transceivers(trans.clone()).await;
+                        let sdp_offer = conn.add_transceivers(vec![(remote_track.kind(), Direction::SendOnly, peer.peer_id().0.to_string())]).await;
+                        if sdp_offer.is_some() {
+                            // println!("Sending sdp offer: {:?}", sdp_offer);
+                            conn.send_channel_data(serde_json::to_vec(&sdp_offer).unwrap()).await;
+                            // println!("SDP offer sent: {:?}", sdp_offer);
+                        }
                     }
+                    // let sdp_offer = peer.add_transceivers(trans).await;
+                    // if sdp_offer.is_some() {
+                    //     println!("{:?}", sdp_offer);
+                    // }
 
                     tokio::spawn({
                         let local_tracks = Arc::clone(&local_tracks);
                         async move {
                             let mut reader = remote_track.rtp_reader();
                             while let Some(data) = reader.recv().await {
-                                println!("Received packet from RemoteTrack");
+                                // println!("Received packet from RemoteTrack");
                                 for t in local_tracks.lock().await.iter() {
-                                    println!("Sending packet to LocalTrack");
-                                    t.write_rtp(clone_media_data(&data));
+                                    let mut data = clone_media_data(&data);
+                                    data.mid = t.mid();
+                                    // println!("Sending packet to LocalTrack");
+                                    t.write_rtp(data);
                                 }
                             }
                         }

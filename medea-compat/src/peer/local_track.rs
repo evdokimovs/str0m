@@ -39,4 +39,8 @@ impl LocalTrack {
     pub fn direction(&self) -> Direction {
         self.direction
     }
+
+    pub fn mid(&self) -> Mid {
+        self.mid
+    }
 }

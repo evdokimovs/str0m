@@ -75,7 +75,7 @@ impl PeerConnectionEngine {
             };
 
             if let Some(mut peer_tx) = peers_tx.get(&src) {
-                println!("Received Packet for Peer by SocketAddr");
+                // println!("Received Packet for Peer by SocketAddr");
                 peer_tx
                     .send(EngineEvent::PacketReceived {
                         at,
@@ -85,7 +85,7 @@ impl PeerConnectionEngine {
                     })
                     .unwrap();
             } else {
-                println!("Received Packet for Peer for all connecting Peers");
+                // println!("Received Packet for Peer for all connecting Peers");
                 for tx in connecting_peers.values_mut() {
                     tx.send(EngineEvent::PacketReceived {
                         at,

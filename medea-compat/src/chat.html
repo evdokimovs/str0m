@@ -43,6 +43,7 @@
         var callback = null;
         async function negotiate() {
             const offer = await rtc.createOffer();
+            console.log('offer: ',  offer);
             console.log('do offer', offer.sdp.split('\r\n'));
             rtc.setLocalDescription(offer);
             await dataChannel.send(JSON.stringify(offer));

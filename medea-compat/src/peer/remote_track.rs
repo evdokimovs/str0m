@@ -9,7 +9,7 @@ use tokio::time::timeout;
 
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::{ChannelData, ChannelId};
-use str0m::media::{Direction, MediaData, Mid};
+use str0m::media::{Direction, MediaData, MediaKind, Mid};
 use str0m::Input;
 use str0m::{Candidate, Rtc};
 use tokio::sync::oneshot;
@@ -20,11 +20,13 @@ use crate::util::proto::{EngineCommand, EngineEvent, PeerId};
 pub struct RemoteTrack {
     tx: mpsc::UnboundedSender<EngineEvent>,
     mid: Mid,
+    direction: Direction,
+    kind: MediaKind,
 }
 
 impl RemoteTrack {
-    pub fn new(tx: mpsc::UnboundedSender<EngineEvent>, mid: Mid) -> Self {
-        Self { tx, mid }
+    pub fn new(tx: mpsc::UnboundedSender<EngineEvent>, mid: Mid, kind: MediaKind, direction: Direction) -> Self {
+        Self { tx, mid, kind, direction }
     }
 
     pub fn rtp_reader(&self) -> mpsc::UnboundedReceiver<MediaData> {
@@ -32,5 +34,13 @@ impl RemoteTrack {
         self.tx
             .send(EngineEvent::SubsriberRemoteTrack(self.mid, tx));
         rx
+    }
+
+    pub fn kind(&self) -> MediaKind {
+        self.kind
+    }
+
+    pub fn direction(&self) -> Direction {
+        self.direction
     }
 }
