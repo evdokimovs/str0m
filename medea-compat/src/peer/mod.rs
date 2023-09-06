@@ -167,7 +167,11 @@ impl PeerConnection {
         tokio::spawn(async move {
             loop {
                 let event = timeout(Duration::from_millis(10), self.event_receiver.recv()).await;
+
+                self.handle_timeout();
+
                 self.poll_output();
+
                 if let Ok(event) = event {
                     if let Some(event) = event {
                         self.handle_event(event);
@@ -227,11 +231,9 @@ impl PeerConnection {
                 resolver.send(answer);
             }
             EngineEvent::AnswerReceived(answer, resolver) => {
-                println!("MIDS [before]: {:?}", self.rtc.mids());
                 if let Some(pending) = self.pending_offer.take() {
                     self.rtc.sdp_api().accept_answer(pending, answer).unwrap();
                 }
-                println!("MIDS [after]: {:?}", self.rtc.mids());
                 for mid in self.rtc.mids() {
                     if !self.known_mids.contains(&mid) {
                         let media = self.rtc.media(mid).unwrap();
@@ -248,7 +250,6 @@ impl PeerConnection {
             }
             EngineEvent::WriteMediaData(data) => {
                 if let Some(writer) = self.rtc.writer(data.mid) {
-                    println!("Writer found");
                     let Some(pt) = writer.match_params(data.params) else {
                         panic!("Write not matches params");
                         return;
@@ -301,12 +302,14 @@ impl PeerConnection {
     }
 
     fn poll_output(&mut self) {
-        if let Ok(output) = self.rtc.poll_output() {
-            match output {
+        loop {
+            match self.rtc.poll_output().unwrap() {
                 Output::Transmit(transmit) => {
                     self.command_sender.send(EngineCommand::Transmit(transmit));
                 }
-                Output::Timeout(timeout) => {}
+                Output::Timeout(timeout) => {
+                    break;
+                }
                 Output::Event(event) => {
                     self.handle_rtc_event(event);
                 }
@@ -316,10 +319,8 @@ impl PeerConnection {
 
     fn handle_rtc_event(&mut self, rtc_event: str0m::Event) {
         use str0m::Event;
-        println!("MIDS: {:?}", self.rtc.mids());
         match rtc_event {
             Event::MediaData(data) => {
-                // println!("MediaData received");
                 if let Some(sub) = self.remote_track_sub.get(&data.mid) {
                     sub.send(data);
                 }
@@ -330,10 +331,10 @@ impl PeerConnection {
                 }
             }
             Event::KeyframeRequest(req) => {
-                req.kind
+                log::error!("KeyframeRequest");
             }
             Event::MediaAdded(media) => {
-                println!("MediaAdded event sent: {:?}", media);
+                log::error!("MediaAdded event sent: {:?}", media);
                 let transceiver =
                     Transceiver::new(media.mid, media.direction, self.event_sender.clone());
                 if media.direction.is_sending() && media.direction.is_receiving() {

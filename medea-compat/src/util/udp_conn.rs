@@ -36,28 +36,31 @@ impl PeerConnectionEngine {
         let loop_handle = std::thread::spawn(move || loop {
             let mut read_buffer = vec![0; 2000];
 
-            match cmd_rx.try_recv() {
-                Ok(event) => match event {
-                    EngineCommand::PeerCreated(id, peer_tx) => {
-                        log::error!("PeerCreated");
-                        connecting_peers.insert(id, peer_tx);
+            loop {
+                match cmd_rx.try_recv() {
+                    Ok(event) => match event {
+                        EngineCommand::PeerCreated(id, peer_tx) => {
+                            log::error!("PeerCreated");
+                            connecting_peers.insert(id, peer_tx);
+                        }
+                        EngineCommand::PeerConnected(id, dst) => {
+                            log::error!("PeerConnected");
+                            let peer = connecting_peers.remove(&id).unwrap();
+                            peers_tx.insert(dst, peer);
+                        }
+                        EngineCommand::Transmit(t) => {
+                            socket.send_to(&t.contents, t.destination).unwrap();
+                        }
+                    },
+                    Err(TryRecvError::Empty) => {
+                        break;
                     }
-                    EngineCommand::PeerConnected(id, dst) => {
-                        log::error!("PeerConnected");
-                        let peer = connecting_peers.remove(&id).unwrap();
-                        peers_tx.insert(dst, peer);
+                    Err(TryRecvError::Disconnected) => {
+                        log::error!("PEER DROP");
+                        break;
                     }
-                    EngineCommand::Transmit(t) => {
-                        socket.send_to(&t.contents, t.destination).unwrap();
-                    }
-                },
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {
-                    log::error!("PEER DROP");
-                    break;
                 }
             }
-
             socket
                 .set_read_timeout(Some(Duration::from_micros(10)))
                 .expect("setting socket read timeout");
@@ -94,24 +97,6 @@ impl PeerConnectionEngine {
                         destination: local_addr,
                     }).unwrap();
                 }
-                // if connecting_peers.len() == 1 {
-                //     for tx in connecting_peers.values_mut() {
-                //         tx.send(EngineEvent::PacketReceived {
-                //             at,
-                //             payload: data.clone(),
-                //             source: src,
-                //             destination: local_addr,
-                //         }).unwrap();
-                //     }
-                // } else {
-                //     connecting_peers.get(&PeerId(1)).unwrap().send(EngineEvent::PacketReceived {
-                //         at,
-                //         payload: data.clone(),
-                //         source: src,
-                //         destination: local_addr,
-                //     }).unwrap();
-                // }
-
             }
         });
 
